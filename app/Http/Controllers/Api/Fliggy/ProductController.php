@@ -8,93 +8,192 @@ use Illuminate\Http\JsonResponse;
 class ProductController extends BaseController
 {
     /**
-     * 获取产品列表 (全量或增量)
+     * 分页获取产品基本信息列表
      * GET /api/fliggy/products/list
      * @param Request $request
      * @return JsonResponse
      */
     public function getProductList(Request $request): JsonResponse
     {
-        $params = [
-            // 根据文档 P7，使用驼峰命名
-            'pageNo' => $request->input('page_no', 1),
-            'pageSize' => min($request->input('page_size', 20), 100),
-            'modifiedStart' => $request->input('modified_start'),
-            'modifiedEnd' => $request->input('modified_end'),
-            // 可根据需要添加其他过滤参数
-        ];
-        // 过滤掉空值
-        $params = array_filter($params, fn($value) => $value !== null && $value !== '');
+        // 验证参数
+        $validated = $request->validate([
+            'page_no' => 'integer|min:1',
+            'page_size' => 'integer|min:1|max:100',
+        ]);
 
-        return $this->callFliggyApi('queryProductBaseInfoByPage', $params);
+        $params = [
+            'pageNo' => $validated['page_no'] ?? 1,
+            'pageSize' => $validated['page_size'] ?? 20,
+        ];
+
+        return $this->callFliggyApi('queryProductBaseInfoByPage', $params, 'POST');
     }
 
     /**
-     * 获取单个产品详细信息
-     * GET /api/fliggy/products/detail/{productId}
-     * 注意：这里假设路由参数是 productId，而非 itemId
+     * 根据产品ID列表批量获取产品基本信息
+     * POST /api/fliggy/products/batch
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function getProductsByIds(Request $request): JsonResponse
+    {
+        // 验证参数
+        $validated = $request->validate([
+            'product_ids' => 'required|array|min:1|max:100',
+            'product_ids.*' => 'required|string',
+        ]);
+
+        $params = [
+            'productIds' => $validated['product_ids'],
+        ];
+
+        return $this->callFliggyApi('queryProductBaseInfoByIds', $params, 'POST');
+    }
+
+    /**
+     * 获取产品详细信息 (单个)
+     * GET /api/fliggy/products/{productId}
      * @param string $productId
      * @return JsonResponse
      */
     public function getProductDetail(string $productId): JsonResponse
     {
         $params = [
-            'productId' => $productId, // 根据文档 P8
+            'productId' => $productId,
         ];
 
-        return $this->callFliggyApi('queryProductDetailInfo', $params);
+        return $this->callFliggyApi('queryProductDetailInfo', $params, 'POST');
     }
 
     /**
-     * 获取产品价格和库存信息 (注意：文档中此接口参数可能需要调整)
-     * GET /api/fliggy/products/prices-stocks?product_ids=ID1,ID2&start_time=...&end_time=...
-     * 或者 POST /api/fliggy/products/prices-stocks
+     * 获取产品价格库存信息
+     * GET /api/fliggy/products/{productId}/price-stock
+     * @param string $productId
      * @param Request $request
      * @return JsonResponse
      */
-    public function getPriceCalendar(Request $request): JsonResponse
+    public function getPriceStock(string $productId, Request $request): JsonResponse
     {
-        // 根据文档 P9, queryProductPriceStock 需要 productIds (复数, 逗号分隔), startTime, endTime
-        // 这里假设前端传入的是 product_ids 字符串 "ID1,ID2" 或数组
-        $productIdsInput = $request->input('product_ids');
-
-        if (is_string($productIdsInput)) {
-            $productIdsString = $productIdsInput; // Already comma-separated?
-        } elseif (is_array($productIdsInput)) {
-            $productIdsString = implode(',', $productIdsInput);
-        } else {
-            // 如果是获取单个产品价格，可能需要调整逻辑或使用不同的参数名
-            // 或者要求必须传入 product_ids
-            $singleProductId = $request->input('product_id'); // Fallback or alternative param name
-            if($singleProductId) {
-                $productIdsString = $singleProductId;
-            } else {
-                return response()->json([
-                    'success' => false,
-                    'error_code' => 'MISSING_PARAMETERS',
-                    'message' => 'product_ids (comma-separated string or array) or product_id is required.'
-                ], 400);
-            }
-        }
+        // 验证参数
+        $validated = $request->validate([
+            'begin_time' => 'integer', // 13位时间戳
+            'end_time' => 'integer',   // 13位时间戳
+        ]);
 
         $params = [
-            'productIds' => $productIdsString, // 根据文档 P9
-            'startTime' => $request->input('start_time'), // 根据文档 P9
-            'endTime' => $request->input('end_time'),     // 根据文档 P9
+            'productId' => $productId,
         ];
 
-        // 验证必填参数
-        if (empty($params['startTime']) || empty($params['endTime'])) {
-            return response()->json([
-                'success' => false,
-                'error_code' => 'MISSING_PARAMETERS',
-                'message' => 'start_time and end_time are required.'
-            ], 400);
+        // 添加可选的时间范围参数
+        if (isset($validated['begin_time'])) {
+            $params['beginTime'] = $validated['begin_time'];
+        }
+        if (isset($validated['end_time'])) {
+            $params['endTime'] = $validated['end_time'];
         }
 
-        // 文档显示这个接口可能更适合 POST，但也可以试试 GET
-        return $this->callFliggyApi('queryProductPriceStock', $params /* , 'POST' */ );
+        return $this->callFliggyApi('queryProductPriceStock', $params, 'POST');
     }
 
+    /**
+     * 批量获取所有产品基本信息（分页遍历）
+     * POST /api/fliggy/products/sync-all
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function syncAllProducts(Request $request): JsonResponse
+    {
+        $pageSize = min($request->input('page_size', 100), 100);
+        $allProducts = [];
+        $pageNo = 1;
+        $totalPages = 1;
+
+        try {
+            do {
+                $params = [
+                    'pageNo' => $pageNo,
+                    'pageSize' => $pageSize,
+                ];
+
+                $response = $this->apiClient->call('queryProductBaseInfoByPage', $params, 'POST');
+
+                // 检查响应是否成功
+                if (isset($response['success']) && $response['success'] === false) {
+                    return response()->json([
+                        'success' => false,
+                        'error_code' => $response['code'] ?? 'UNKNOWN_ERROR',
+                        'message' => $response['msg'] ?? 'Failed to fetch products',
+                    ], 400);
+                }
+
+                // 提取产品列表
+                if (isset($response['data']['productBaseInfos'])) {
+                    $products = $response['data']['productBaseInfos'];
+                    $allProducts = array_merge($allProducts, $products);
+                    
+                    // 如果返回的产品数量少于页大小，说明已经是最后一页
+                    if (count($products) < $pageSize) {
+                        break;
+                    }
+                }
+
+                $pageNo++;
+
+                // 添加延迟避免请求过快
+                usleep(200000); // 0.2秒
+
+            } while ($pageNo <= 1000); // 设置最大页数限制，防止无限循环
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_products' => count($allProducts),
+                    'total_pages' => $pageNo - 1,
+                    'products' => $allProducts,
+                ],
+                'message' => 'Successfully synced all products'
+            ]);
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Failed to sync all products", [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'error_code' => 'SYNC_ERROR',
+                'message' => 'Failed to sync all products: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 调试接口 - 查看原始响应
+     * GET /api/fliggy/products/debug
+     */
+    public function debug(Request $request): JsonResponse
+    {
+        try {
+            $params = [
+                'pageNo' => 1,
+                'pageSize' => 10,
+            ];
+
+            // 直接调用 API 不要包装
+            $response = $this->apiClient->call('queryProductBaseInfoByPage', $params, 'POST');
+
+            return response()->json([
+                'success' => true,
+                'raw_response' => $response,
+                'response_keys' => array_keys($response),
+                'message' => 'Debug info'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ], 500);
+        }
+    }
 }
-?>

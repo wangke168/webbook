@@ -11,8 +11,9 @@ return [
     |
     */
 
-    'app_key' => env('FLIGGY_DISTRIBUTOR_ID'),
-    'app_secret' => env('FLIGGY_PRIVATE_KEY'),
+    'distributor_id' => env('FLIGGY_DISTRIBUTOR_ID'),
+    'app_secret' => env('FLIGGY_APP_SECRET'),
+    'app_key' => env('FLIGGY_APP_KEY', null), // 仅淘宝开放平台接口需要
 
     /*
     |--------------------------------------------------------------------------

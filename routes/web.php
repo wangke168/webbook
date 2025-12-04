@@ -20,10 +20,12 @@ Route::prefix('fliggy')->group(function () {
 
     // --- 产品相关 ---
     Route::prefix('products')->controller(ProductController::class)->group(function () {
-        Route::get('/list', 'getProductList')->name('fliggy.products.list'); // 获取产品列表
-        Route::get('/{itemId}', 'getProductDetail')->name('fliggy.products.detail'); // 获取产品详情
-        Route::get('/{itemId}/price-calendar', 'getPriceCalendar')->name('fliggy.products.price_calendar'); // 获取价格日历
-        // 可继续添加其他产品路由...
+        Route::get('/debug', 'debug')->name('fliggy.products.debug'); // 调试接口
+        Route::get('/list', 'getProductList')->name('fliggy.products.list'); // 分页获取产品列表
+        Route::post('/batch', 'getProductsByIds')->name('fliggy.products.batch'); // 根据ID批量获取产品
+        Route::post('/sync-all', 'syncAllProducts')->name('fliggy.products.sync_all'); // 批量同步所有产品
+        Route::get('/{productId}', 'getProductDetail')->name('fliggy.products.detail'); // 获取产品详情
+        Route::get('/{productId}/price-stock', 'getPriceStock')->name('fliggy.products.price_stock'); // 获取价格库存
     });
 
     // --- 订单相关 ---

@@ -14,9 +14,9 @@ class FliggySignatureService
         $this->privateKey = config('fliggy.private_key');
         $this->publicKey = config('fliggy.public_key'); // Optional for verification
 
+        // private_key 只在使用淘宝开放平台 API 时需要
         if (empty($this->privateKey)) {
-            Log::critical("Fliggy Private Key is missing or empty in configuration.");
-            throw new \InvalidArgumentException("Fliggy Private Key not configured correctly.");
+            Log::warning("Fliggy Private Key is not configured. Only custom API calls will be available.");
         }
     }
 

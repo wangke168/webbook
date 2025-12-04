@@ -11,13 +11,15 @@ use InvalidArgumentException;
 class FliggyApiClient
 {
     private Client $client;
-    private FliggySignatureService $signatureService;
+    private ?FliggySignatureService $signatureService;
     private string $appKey;
     private string $appSecret;
     private string $baseUrl;
+    private string $distributorId;
     private const DEFAULT_API_PATH = '/router/rest';
+    private const CUSTOM_API_BASE = 'https://api.alitrip.alibaba.com/api/v1/hotelticket';
 
-    public function __construct(FliggySignatureService $signatureService)
+    public function __construct(?FliggySignatureService $signatureService = null)
     {
         $this->signatureService = $signatureService;
 
@@ -38,13 +40,14 @@ class FliggyApiClient
      */
     private function loadAndValidateConfig(): void
     {
-        $this->appKey = config('fliggy.app_key');
+        $this->distributorId = config('fliggy.distributor_id');
         $this->appSecret = config('fliggy.app_secret');
+        $this->appKey = config('fliggy.app_key'); // 可选，仅淘宝开放平台需要
         $this->baseUrl = rtrim(config('fliggy.base_url'), '/');
 
-        if (empty($this->appKey)) {
-            Log::critical("Fliggy App Key is missing or empty in configuration.");
-            throw new InvalidArgumentException("Fliggy App Key not configured.");
+        if (empty($this->distributorId)) {
+            Log::critical("Fliggy Distributor ID is missing or empty in configuration.");
+            throw new InvalidArgumentException("Fliggy Distributor ID not configured.");
         }
 
         if (empty($this->appSecret)) {
@@ -67,7 +70,7 @@ class FliggyApiClient
     /**
      * Makes a call to the Fliggy API.
      *
-     * @param string $method The Fliggy API method name (e.g., alitrip.travel.trades.search).
+     * @param string $method The Fliggy API method name (e.g., queryProductBaseInfoByPage or alitrip.travel.trades.search).
      * @param array $params Business parameters for the API call.
      * @param string $httpMethod HTTP method ('GET' or 'POST'). Defaults to 'GET'.
      * @return array Decoded JSON response from the API.
@@ -80,14 +83,26 @@ class FliggyApiClient
             throw new InvalidArgumentException("Unsupported HTTP method: $httpMethod. Use GET or POST.");
         }
 
-        // 1. Prepare common system parameters
+        // 判断是自有 API 还是淘宝开放平台 API
+        $isCustomApi = !str_contains($method, '.');
+        
+        if ($isCustomApi) {
+            return $this->callCustomApi($method, $params, $httpMethod);
+        }
+
+        // 淘宝开放平台 API 需要 signatureService
+        if (!$this->signatureService) {
+            throw new InvalidArgumentException("SignatureService is required for Taobao Open Platform APIs. Please ensure FLIGGY_PRIVATE_KEY is configured.");
+        }
+
+        // 1. Prepare common system parameters (淘宝开放平台)
         $commonParams = [
             'method' => $method,
             'app_key' => $this->appKey,
-            'timestamp' => now()->timezone('Asia/Shanghai')->format('Y-m-d H:i:s'), // Standardized format
+            'timestamp' => now()->timezone('Asia/Shanghai')->format('Y-m-d H:i:s'),
             'format' => 'json',
             'v' => '2.0',
-            'sign_method' => 'hmac', // Important: Use 'hmac' for RSA-SHA256
+            'sign_method' => 'hmac',
             'simplify' => 'true',
         ];
 
@@ -240,6 +255,16 @@ class FliggyApiClient
             throw new \Exception("Fliggy API returned an empty response body for a successful request.");
         }
 
+        // 检测响应格式：XML 或 JSON
+        $contentType = $response->getHeaderLine('Content-Type');
+        $isXml = (stripos($rawBody, '<?xml') === 0) || (stripos($contentType, 'xml') !== false);
+
+        if ($isXml) {
+            // 解析 XML 响应
+            Log::debug("Detected XML response, parsing...");
+            return $this->parseXmlResponse($rawBody);
+        }
+
         // Attempt to decode JSON
         $decodedResponse = json_decode($rawBody, true);
 
@@ -248,7 +273,7 @@ class FliggyApiClient
             Log::error("Failed to decode JSON response from Fliggy API", [
                 'json_error_code' => json_last_error(),
                 'json_error_message' => $jsonErrorMsg,
-                'raw_body_received' => $rawBody,
+                'raw_body_snippet' => substr($rawBody, 0, 1000),
                 'body_length' => strlen($rawBody)
             ]);
             throw new \Exception("Failed to decode JSON response from Fliggy API. JSON Error: $jsonErrorMsg. Body Length: " . strlen($rawBody));
@@ -273,6 +298,158 @@ class FliggyApiClient
         ]);
 
         return $decodedResponse;
+    }
+
+    /**
+     * 解析 XML 响应
+     *
+     * @param string $xmlBody XML 响应体
+     * @return array
+     * @throws \Exception
+     */
+    private function parseXmlResponse(string $xmlBody): array
+    {
+        libxml_use_internal_errors(true);
+        $xml = simplexml_load_string($xmlBody, 'SimpleXMLElement', LIBXML_NOCDATA);
+
+        if ($xml === false) {
+            $errors = libxml_get_errors();
+            $errorMessages = array_map(fn($error) => $error->message, $errors);
+            libxml_clear_errors();
+            
+            Log::error("Failed to parse XML response", [
+                'xml_errors' => $errorMessages,
+                'xml_snippet' => substr($xmlBody, 0, 1000)
+            ]);
+            throw new \Exception("Failed to parse XML response: " . implode(', ', $errorMessages));
+        }
+
+        // 将 XML 转换为数组
+        $json = json_encode($xml);
+        $array = json_decode($json, true);
+
+        Log::info("Successfully parsed XML response", [
+            'top_level_keys' => array_keys($array ?? []),
+            'response_size_bytes' => strlen($xmlBody)
+        ]);
+
+        return $array ?? [];
+    }
+
+    /**
+     * 调用自有 API（如 queryProductBaseInfoByPage）
+     *
+     * @param string $method API 方法名
+     * @param array $params 业务参数
+     * @param string $httpMethod HTTP 方法
+     * @return array
+     * @throws \Exception
+     */
+    private function callCustomApi(string $method, array $params = [], string $httpMethod = 'GET'): array
+    {
+        // 1. 准备时间戳（13位毫秒级）
+        $timestamp = (int)(microtime(true) * 1000);
+
+        // 2. 根据不同接口生成不同的签名参数
+        $signString = $this->buildSignString($method, $timestamp, $params);
+        $sign = hash('sha256', $signString);
+
+        // 3. 合并参数
+        $allParams = array_merge([
+            'distributorId' => $this->distributorId,
+            'timestamp' => $timestamp,
+            'sign' => $sign,
+        ], $params);
+
+        // 4. 构建完整 URL（添加 format=json 参数）
+        $fullRequestUrl = self::CUSTOM_API_BASE . '/' . $method . '?format=json';
+
+        Log::info("Calling Custom Fliggy API", [
+            'method_name' => $method,
+            'http_method' => $httpMethod,
+            'request_url' => $fullRequestUrl,
+            'params_keys' => array_keys($allParams)
+        ]);
+
+        try {
+            $options = [
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                ],
+            ];
+            $effectiveUrl = $fullRequestUrl;
+
+            if ($httpMethod === 'POST') {
+                // 使用 JSON 格式发送请求体
+                $options['json'] = $allParams;
+                Log::debug("Sending POST request with JSON body", [
+                    'param_keys' => array_keys($allParams),
+                    'json_body' => json_encode($allParams)
+                ]);
+            } else { // GET
+                $queryString = http_build_query($allParams, '', '&', PHP_QUERY_RFC3986);
+                $effectiveUrl .= '&' . $queryString; // 使用 & 因为已经有 format=json 参数
+                Log::debug("Constructed GET request URL", ['url' => $effectiveUrl]);
+            }
+
+            /** @var Response $response */
+            $response = $this->client->request($httpMethod, $effectiveUrl, $options);
+
+            return $this->handleResponse($response, $effectiveUrl, $allParams);
+
+        } catch (GuzzleException $e) {
+            Log::error("HTTP Exception during Custom API call", [
+                'message' => $e->getMessage(),
+                'request_url' => $fullRequestUrl,
+                'http_method' => $httpMethod
+            ]);
+            throw new \Exception("Network error: " . $e->getMessage(), $e->getCode(), $e);
+        }
+    }
+
+    /**
+     * 根据不同的接口构建签名字符串
+     *
+     * @param string $method API 方法名
+     * @param int $timestamp 时间戳
+     * @param array $params 业务参数
+     * @return string
+     */
+    private function buildSignString(string $method, int $timestamp, array $params): string
+    {
+        // 根据文档，不同接口的签名参数格式：
+        // queryProductBaseInfoByPage: distributorId_timestamp_privateKey
+        // queryProductBaseInfoByIds: distributorId_timestamp_productIds_privateKey
+        // queryProductDetailInfo: distributorId_timestamp_productId_privateKey
+        // queryProductPriceStock: distributorId_timestamp_productId_privateKey
+
+        $signString = $this->distributorId . '_' . $timestamp;
+
+        // 根据不同的方法添加额外的签名参数
+        switch ($method) {
+            case 'queryProductBaseInfoByIds':
+                if (isset($params['productIds']) && is_array($params['productIds'])) {
+                    $signString .= '_' . implode(',', $params['productIds']);
+                }
+                break;
+            case 'queryProductDetailInfo':
+            case 'queryProductPriceStock':
+                if (isset($params['productId'])) {
+                    $signString .= '_' . $params['productId'];
+                }
+                break;
+            // queryProductBaseInfoByPage 不需要额外参数
+        }
+
+        // 最后添加私钥
+        $signString .= '_' . $this->appSecret;
+
+        Log::debug("Built sign string for Custom API", [
+            'method' => $method,
+            'sign_string_snippet' => substr($signString, 0, 100) . '...'
+        ]);
+
+        return $signString;
     }
 }
 ?>
