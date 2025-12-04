@@ -30,19 +30,16 @@ Route::prefix('fliggy')->group(function () {
 
     // --- 订单相关 ---
     Route::prefix('orders')->controller(OrderController::class)->group(function () {
-        Route::get('/list', 'getOrderList')->name('fliggy.orders.list'); // 获取订单列表
-        Route::get('/{orderId}', 'getOrderDetail')->name('fliggy.orders.detail'); // 获取订单详情
-        Route::get('/{orderId}/codes', 'getOrderCodes')->name('fliggy.orders.codes'); // 获取订单凭证码
-        // 可继续添加其他订单路由...
+        Route::get('/search', 'searchOrder')->name('fliggy.orders.search'); // 订单查询
+        Route::post('/cancel', 'cancelOrder')->name('fliggy.orders.cancel'); // 订单取消
+        Route::post('/refund', 'refundOrder')->name('fliggy.orders.refund'); // 订单退款
+        Route::get('/refund/search', 'searchRefundOrder')->name('fliggy.orders.refund.search'); // 查询退款单
     });
 
     // --- 预订相关 (下单、取消、退款等) ---
     Route::prefix('bookings')->controller(BookingController::class)->group(function () {
+        Route::post('/validate', 'validateOrder')->name('fliggy.bookings.validate'); // 订单校验（预下单）
         Route::post('/create', 'createOrder')->name('fliggy.bookings.create'); // 创建订单
-        Route::post('/{orderId}/cancel', 'cancelOrder')->name('fliggy.bookings.cancel'); // 取消订单
-        Route::post('/{orderId}/refund', 'applyRefund')->name('fliggy.bookings.refund'); // 申请退款
-        Route::get('/refunds/{refundId}', 'getRefundDetail')->name('fliggy.bookings.refund_detail'); // 查询退款详情
-        // 可继续添加其他预订路由...
     });
 
     // --- Webhook ---

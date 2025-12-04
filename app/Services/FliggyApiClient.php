@@ -421,7 +421,15 @@ class FliggyApiClient
 
     /**
      * 根据不同的接口构建待签名参数字符串
-     * 签名规则：列表参数按照字典规则升序排列，拼接时按英文逗号分割，无空格
+     * 签名规则：按照参数名的字典序升序排列，将参数值依次拼接成字符串（无需分隔符）
+     *
+     * 文档中的特殊签名参数：
+     * - validateOrder: distributorId_timestamp_productId
+     * - createOrder: distributorId_timestamp (无额外参数)
+     * - searchOrder: distributorId_timestamp_orderId 或 distributorId_timestamp_
+     * - cancelOrder: distributorId_timestamp_orderId 或 distributorId_timestamp_
+     * - refundOrder: distributorId_timestamp_orderId
+     * - searchRefundOrder: distributorId_timestamp_orderId_ 或 distributorId_timestamp_
      *
      * @param string $method API 方法名
      * @param int $timestamp 时间戳
@@ -439,24 +447,24 @@ class FliggyApiClient
         // 按字典顺序升序排列
         ksort($allParams);
 
-        // 处理参数值并拼接
-        $paramStrings = [];
+        // 将参数值依次拼接成字符串（无需分隔符）
+        $valueStrings = [];
         foreach ($allParams as $key => $value) {
             if ($value === null || $value === '') {
                 continue;
             }
             
-            // 如果是数组，按照英文逗号分割
+            // 如果是数组或对象，转成JSON字符串
             if (is_array($value)) {
-                $value = implode(',', $value);
+                $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
             
-            // 拼接格式：key=value
-            $paramStrings[] = $key . '=' . $value;
+            // 只拼接值，不包含key
+            $valueStrings[] = $value;
         }
 
-        // 按英文逗号分割，无空格
-        $signString = implode(',', $paramStrings);
+        // 直接拼接，无分隔符
+        $signString = implode('', $valueStrings);
 
         Log::debug("Built sign params for Custom API", [
             'method' => $method,
