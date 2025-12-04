@@ -19,7 +19,7 @@ class FliggyApiClient
         $this->signatureService = $signatureService;
         $this->appKey = config('fliggy.app_key');
         $this->appSecret = config('fliggy.app_secret'); // Might be used as boundary
-        $this->baseUrl = rtrim(config('fliggy.base_url'), '/');
+        $this->baseUrl = rtrim(config('api_test_base_url'), '/');
 
         $this->client = new Client([
             'timeout' => config('fliggy.timeout', 30),
@@ -70,7 +70,7 @@ class FliggyApiClient
         // However, since your generateSignature only takes $dataToSign, we pass the concatenated string.
         // Let's assume the standard way is to just use the concatenated string for RSA.
         // If that fails, try wrapping with app_secret.
-        $dataToSign = $stringToBeSigned; // Primary attempt
+        $dataToSign = $this->appSecret . $stringToBeSigned . $this->appSecret;
 
         // Alternative if the above doesn't work (uncomment one of the lines below to test):
         // $dataToSign = $this->appSecret . $stringToBeSigned . $this->appSecret; // Try with app_secret boundaries
@@ -90,7 +90,7 @@ class FliggyApiClient
         $allParams['sign'] = $sign;
 
         // 6. Build the request URL
-        $requestUrl = $this->baseUrl . '/router/rest';
+        $requestUrl = $this->baseUrl . 'https://pre-api.alitrip.alibaba.com/router/rest';
 
         Log::debug("Fliggy API Request", [
             'url' => $requestUrl,
