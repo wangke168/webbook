@@ -1,30 +1,43 @@
 <?php
+// config/fliggy.php
 
 return [
-    // Fliggy 分配的分销商 ID
-    'distributor_id' => env('FLIGGY_DISTRIBUTOR_ID', null),
+    /*
+    |--------------------------------------------------------------------------
+    | Fliggy API Credentials
+    |--------------------------------------------------------------------------
+    |
+    | Your application credentials obtained from the Fliggy Open Platform.
+    |
+    */
 
-    // Fliggy 分配的私钥 (用于签名)
-    'private_key' => env('FLIGGY_PRIVATE_KEY', null),
+    'app_key' => env('FLIGGY_DISTRIBUTOR_ID'),
+    'app_secret' => env('FLIGGY_PRIVATE_KEY'),
 
-    // Fliggy API 接口地址 (生产环境)
-    'api_base_url' => env('FLIGGY_API_BASE_URL', 'https://api.alitrip.alibaba.com'),
+    /*
+    |--------------------------------------------------------------------------
+    | Fliggy API Keys (RSA)
+    |--------------------------------------------------------------------------
+    |
+    | Your RSA private key for signing requests and optionally the public key
+    | for verifying callbacks.
+    | The private key can be the content string or a file path like 'file:///path/to/key.pem'.
+    |
+    */
 
-    // Fliggy API 测试环境地址
-    'api_test_base_url' => env('FLIGGY_API_TEST_BASE_URL', 'https://pre-api.alitrip.alibaba.com'),
+    'private_key' => env('FLIGGY_PRIVATE_KEY'),
+    'public_key' => env('FLIGGY_PUBLIC_KEY', null), // Optional
 
-    // 是否使用测试环境
-    'use_sandbox' => env('FLIGGY_USE_SANDBOX', false),
+    /*
+    |--------------------------------------------------------------------------
+    | Fliggy API Settings
+    |--------------------------------------------------------------------------
+    */
 
-    // 默认响应格式 (json/xml)
-    'default_format' => env('FLIGGY_DEFAULT_FORMAT', 'json'),
+    'base_url' => env('FLIGGY_BASE_URL', 'https://eco.taobao.com'), // Production
+    // 'base_url' => env('FLIGGY_BASE_URL', 'https://pre-api.alitrip.alibaba.com'), // Sandbox/Pre-release
 
-    // Fliggy 公钥 (用于验证 Fliggy 推送过来的消息签名 - 如有提供)
-    'public_key' => env('FLIGGY_PUBLIC_KEY', null),
+    'timeout' => env('FLIGGY_TIMEOUT', 30),
 
-    // Webhook URLs (用于调试或记录，非必需)
-    'webhook_urls' => [
-        'product_change' => env('FLIGGY_WEBHOOK_PRODUCT_CHANGE', null),
-        'order_status' => env('FLIGGY_WEBHOOK_ORDER_STATUS', null),
-    ],
 ];
+?>

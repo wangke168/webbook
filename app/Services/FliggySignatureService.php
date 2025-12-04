@@ -6,74 +6,85 @@ use Illuminate\Support\Facades\Log;
 
 class FliggySignatureService
 {
-    protected $privateKey;
-    protected $publicKey;
+    protected string $privateKey;
+    protected ?string $publicKey; // Can be null if verification isn't needed/configured
 
     public function __construct()
     {
         $this->privateKey = config('fliggy.private_key');
-        $this->publicKey = config('fliggy.public_key'); // 可选
+        $this->publicKey = config('fliggy.public_key'); // Optional for verification
 
-        if (!$this->privateKey) {
-            throw new \Exception("Fliggy Private Key not configured.");
+        if (empty($this->privateKey)) {
+            Log::critical("Fliggy Private Key is missing or empty in configuration.");
+            throw new \InvalidArgumentException("Fliggy Private Key not configured correctly.");
         }
     }
 
     /**
-     * 生成签名
+     * Generates an RSA-SHA256 signature for Fliggy API calls.
+     * Assumes sign_method=hmac (RSA-SHA256) is used.
      *
-     * @param string $dataToSign 签名原始字符串 (param)
-     * @return string base64 编码后的签名
+     * @param string $dataToSign The string to be signed.
+     * @return string Base64 encoded signature.
+     * @throws \Exception If signing fails.
      */
     public function generateSignature(string $dataToSign): string
     {
-        $privateKey = openssl_pkey_get_private($this->privateKey);
+        $privateKeyResource = openssl_pkey_get_private($this->privateKey);
 
-        if (!$privateKey) {
-            Log::error("Unable to load private key for signing.", ['key_snippet' => substr($this->privateKey, 0, 50)]);
-            throw new \Exception("Unable to load private key for signing.");
+        if (!$privateKeyResource) {
+            $keySnippet = substr($this->privateKey, 0, 50) . (strlen($this->privateKey) > 50 ? '...' : '');
+            Log::error("Unable to load private key for signing.", ['key_snippet' => $keySnippet]);
+            throw new \Exception("Unable to load private key for signing. Check configuration and key format.");
         }
 
         $signature = '';
-        $result = openssl_sign($dataToSign, $signature, $privateKey, OPENSSL_ALGO_SHA256);
+        // Using OPENSSL_ALGO_SHA256 for RSA-SHA256
+        $result = openssl_sign($dataToSign, $signature, $privateKeyResource, OPENSSL_ALGO_SHA256);
 
-        openssl_free_key($privateKey);
+        openssl_free_key($privateKeyResource);
 
         if (!$result) {
-            Log::error("OpenSSL signing failed.");
-            throw new \Exception("OpenSSL signing failed.");
+            Log::error("OpenSSL signing operation failed.", ['openssl_error' => openssl_error_string()]);
+            throw new \Exception("OpenSSL signing failed: " . openssl_error_string());
         }
 
-        return base64_encode($signature);
+        $encodedSignature = base64_encode($signature);
+        Log::debug("Generated Fliggy Signature", [
+            'data_to_sign_length' => strlen($dataToSign),
+            'data_to_sign_snippet' => substr($dataToSign, 0, 100) . (strlen($dataToSign) > 100 ? '...' : ''),
+            'signature_base64' => $encodedSignature
+        ]);
+
+        return $encodedSignature;
     }
 
     /**
-     * 验证签名 (处理 Fliggy 推送时使用)
+     * Verifies an RSA-SHA256 signature from Fliggy notifications.
+     * Assumes sign_method=hmac (RSA-SHA256) was used by Fliggy.
      *
-     * @param string $dataToSign 签名原始字符串 (param)
-     * @param string $signature base64 编码的签名
-     * @return bool
+     * @param string $dataToSign The original string that was signed.
+     * @param string $signature The base64 encoded signature received.
+     * @return bool True if verified, false otherwise.
      */
     public function verifySignature(string $dataToSign, string $signature): bool
     {
-        if (!$this->publicKey) {
-            Log::warning("Fliggy Public Key not configured. Skipping signature verification.");
-            // 根据业务需求决定是否允许无签名验证。此处选择拒绝。
-            // 如果文档说明无需验证，可以直接返回 true。
-            // return true;
-            return false; // 更安全的做法是必须配置公钥才能验证
+        if (empty($this->publicKey)) {
+            Log::warning("Fliggy Public Key not configured. Signature verification skipped.");
+            return false; // Or true based on security policy
         }
 
         $decodedSignature = base64_decode($signature, true);
         if ($decodedSignature === false) {
-            Log::warning("Invalid base64 encoded signature received.");
+            Log::warning("Invalid base64 encoded signature received for verification.");
             return false;
         }
 
         $publicKeyResource = openssl_pkey_get_public($this->publicKey);
 
         if (!$publicKeyResource) {
-            Log::error("Unable to load public key for verification.", ['key_snippet' => substr($this->publicKey, 0, 50)]);
+            $keySnippet = substr($this->publicKey, 0, 50) . (strlen($this->publicKey) > 50 ? '...' : '');
+            Log::error("Unable to load public key for verification.", ['key_snippet' => $keySnippet]);
             return false;
         }
 
@@ -81,13 +92,21 @@ class FliggySignatureService
         openssl_free_key($publicKeyResource);
 
         if ($result === 1) {
-            return true; // 验证成功
+            Log::info("Fliggy signature verified successfully.");
+            return true;
         } elseif ($result === 0) {
-            Log::notice("Signature verification failed: Signature invalid.", ['data_to_sign' => $dataToSign, 'received_signature' => $signature]);
+            Log::notice("Fliggy signature verification failed: Signature invalid.", [
+                'data_to_sign_snippet' => substr($dataToSign, 0, 100),
+                'received_signature' => $signature
+            ]);
         } else {
-            Log::error("Signature verification error: OpenSSL error occurred.", ['openssl_error' => openssl_error_string()]);
+            Log::error("Fliggy signature verification error: OpenSSL error occurred.", [
+                'openssl_error' => openssl_error_string()
+            ]);
         }
 
-        return false; // 验证失败或出错
+        return false;
     }
 }
+
+?>
