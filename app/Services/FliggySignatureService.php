@@ -31,16 +31,27 @@ class FliggySignatureService
      */
     public function generateSignature(string $dataToSign): string
     {
-        $privateKeyResource = openssl_pkey_get_private($this->privateKey);
+        // 飞猪提供的privateKey是Base64编码的，需要先解码
+        $privateKeyDecoded = base64_decode($this->privateKey);
+        if ($privateKeyDecoded === false) {
+            // 如果解码失败，可能是PEM格式的私钥，直接使用
+            $privateKeyDecoded = $this->privateKey;
+        }
+
+        // 构建 PKCS8 格式的私钥
+        $privateKeyPem = $this->buildPemKey($privateKeyDecoded, 'PRIVATE');
+        $privateKeyResource = openssl_pkey_get_private($privateKeyPem);
 
         if (!$privateKeyResource) {
-            $keySnippet = substr($this->privateKey, 0, 50) . (strlen($this->privateKey) > 50 ? '...' : '');
-            Log::error("Unable to load private key for signing.", ['key_snippet' => $keySnippet]);
+            Log::error("Unable to load private key for signing.", [
+                'key_length' => strlen($this->privateKey),
+                'openssl_error' => openssl_error_string()
+            ]);
             throw new \Exception("Unable to load private key for signing. Check configuration and key format.");
         }
 
         $signature = '';
-        // Using OPENSSL_ALGO_SHA256 for RSA-SHA256
+        // Using OPENSSL_ALGO_SHA256 for RSA-SHA256 (SHA256withRSA)
         $result = openssl_sign($dataToSign, $signature, $privateKeyResource, OPENSSL_ALGO_SHA256);
 
         openssl_free_key($privateKeyResource);
@@ -53,11 +64,36 @@ class FliggySignatureService
         $encodedSignature = base64_encode($signature);
         Log::debug("Generated Fliggy Signature", [
             'data_to_sign_length' => strlen($dataToSign),
-            'data_to_sign_snippet' => substr($dataToSign, 0, 100) . (strlen($dataToSign) > 100 ? '...' : ''),
+            'data_to_sign' => $dataToSign,
             'signature_base64' => $encodedSignature
         ]);
 
         return $encodedSignature;
+    }
+
+    /**
+     * 构建 PEM 格式的密钥
+     *
+     * @param string $keyData 密钥数据
+     * @param string $type 'PRIVATE' or 'PUBLIC'
+     * @return string
+     */
+    private function buildPemKey(string $keyData, string $type = 'PRIVATE'): string
+    {
+        // 如果已经是PEM格式，直接返回
+        if (strpos($keyData, '-----BEGIN') !== false) {
+            return $keyData;
+        }
+
+        // 否则构建 PEM 格式
+        $keyBase64 = base64_encode($keyData);
+        $keyFormatted = chunk_split($keyBase64, 64, "\n");
+        
+        if ($type === 'PRIVATE') {
+            return "-----BEGIN PRIVATE KEY-----\n" . $keyFormatted . "-----END PRIVATE KEY-----\n";
+        } else {
+            return "-----BEGIN PUBLIC KEY-----\n" . $keyFormatted . "-----END PUBLIC KEY-----\n";
+        }
     }
 
     /**
