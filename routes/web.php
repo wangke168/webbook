@@ -10,6 +10,11 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+
+
+
+Route::get('product', [ProductController::class, 'getProductList']);
+
 // 其他 API 路由 (如之前定义的 products, orders)
 Route::prefix('fliggy')->group(function () {
 
