@@ -28,11 +28,31 @@ class BaseController extends Controller
         try {
             $response = $this->apiClient->call($method, $params, $httpMethod);
 
+            // 检查飞猪API业务层面的错误（success=false）
+            if (isset($response['success']) && $response['success'] === false) {
+                $errorCode = $response['code'] ?? 'UNKNOWN_ERROR';
+                $errorMsg = $response['msg'] ?? 'Unknown error occurred.';
+                
+                \Illuminate\Support\Facades\Log::warning("Fliggy API Business Error", [
+                    'method' => $method,
+                    'error_code' => $errorCode,
+                    'error_message' => $errorMsg,
+                    'full_response' => $response
+                ]);
+                
+                return response()->json([
+                    'success' => false,
+                    'error_code' => $errorCode,
+                    'message' => $errorMsg,
+                    'details' => $response
+                ], 200); // 返回200状态码，但success=false
+            }
+
             // 检查 Fliggy API 返回的错误码 (假设错误信息在特定字段)
             if (isset($response['error_response'])) {
                 $errorCode = $response['error_response']['code'] ?? 'UNKNOWN_ERROR';
                 $errorMsg = $response['error_response']['msg'] ?? 'Unknown error occurred.';
-                \Illuminate\Support\Facades\Log::warning("Fliggy API Business Error", [
+                \Illuminate\Support\Facades\Log::warning("Fliggy API Error Response", [
                     'method' => $method,
                     'error_code' => $errorCode,
                     'error_message' => $errorMsg,
@@ -43,7 +63,7 @@ class BaseController extends Controller
                     'error_code' => $errorCode,
                     'message' => $errorMsg,
                     'details' => $response['error_response']
-                ], 400); // 或根据具体情况返回 200 并包含错误信息
+                ], 200);
             }
 
             // 成功响应

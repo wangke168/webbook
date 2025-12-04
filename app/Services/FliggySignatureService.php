@@ -9,12 +9,13 @@ class FliggySignatureService
     protected string $privateKey;
     protected ?string $publicKey; // Can be null if verification isn't needed/configured
 
-    public function __construct()
+    public function __construct(?string $privateKey = null)
     {
-        $this->privateKey = config('fliggy.private_key');
+        // 如果传入了privateKey则使用，否则从配置文件读取
+        $this->privateKey = $privateKey ?? config('fliggy.private_key') ?? config('fliggy.app_secret');
         $this->publicKey = config('fliggy.public_key'); // Optional for verification
 
-        // private_key 只在使用淘宝开放平台 API 时需要
+        // 检查privateKey是否为空
         if (empty($this->privateKey)) {
             Log::warning("Fliggy Private Key is not configured. Only custom API calls will be available.");
         }

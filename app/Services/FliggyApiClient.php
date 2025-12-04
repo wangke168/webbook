@@ -21,10 +21,14 @@ class FliggyApiClient
 
     public function __construct(?FliggySignatureService $signatureService = null)
     {
-        $this->signatureService = $signatureService;
-
-        // Load and validate configurations
+        // 加载配置
         $this->loadAndValidateConfig();
+
+        // 如果没有传入signatureService，使用app_secret创建一个
+        if ($signatureService === null && $this->appSecret) {
+            $signatureService = new FliggySignatureService($this->appSecret);
+        }
+        $this->signatureService = $signatureService;
 
         // Initialize Guzzle client
         $this->client = new Client([
@@ -347,28 +351,36 @@ class FliggyApiClient
      */
     private function callCustomApi(string $method, array $params = [], string $httpMethod = 'GET'): array
     {
+        // 检查是否有私钥配置
+        if (!$this->signatureService) {
+            throw new InvalidArgumentException("Private key is required for custom API calls. Please ensure FLIGGY_PRIVATE_KEY is configured.");
+        }
+
         // 1. 准备时间戳（13位毫秒级）
         $timestamp = (int)(microtime(true) * 1000);
 
-        // 2. 根据不同接口生成不同的签名参数
-        $signString = $this->buildSignString($method, $timestamp, $params);
-        $sign = hash('sha256', $signString);
+        // 2. 构建待签名参数字符串
+        $signParams = $this->buildSignParams($method, $timestamp, $params);
 
-        // 3. 合并参数
+        // 3. 使用RSA-SHA256生成签名
+        $sign = $this->signatureService->generateSignature($signParams);
+
+        // 4. 合并参数
         $allParams = array_merge([
             'distributorId' => $this->distributorId,
             'timestamp' => $timestamp,
             'sign' => $sign,
         ], $params);
 
-        // 4. 构建完整 URL（添加 format=json 参数）
+        // 5. 构建完整 URL（添加 format=json 参数）
         $fullRequestUrl = self::CUSTOM_API_BASE . '/' . $method . '?format=json';
 
         Log::info("Calling Custom Fliggy API", [
             'method_name' => $method,
             'http_method' => $httpMethod,
             'request_url' => $fullRequestUrl,
-            'params_keys' => array_keys($allParams)
+            'params_keys' => array_keys($allParams),
+            'sign_params' => $signParams
         ]);
 
         try {
@@ -408,45 +420,48 @@ class FliggyApiClient
     }
 
     /**
-     * 根据不同的接口构建签名字符串
+     * 根据不同的接口构建待签名参数字符串
+     * 签名规则：列表参数按照字典规则升序排列，拼接时按英文逗号分割，无空格
      *
      * @param string $method API 方法名
      * @param int $timestamp 时间戳
      * @param array $params 业务参数
      * @return string
      */
-    private function buildSignString(string $method, int $timestamp, array $params): string
+    private function buildSignParams(string $method, int $timestamp, array $params): string
     {
-        // 根据文档，不同接口的签名参数格式：
-        // queryProductBaseInfoByPage: distributorId_timestamp_privateKey
-        // queryProductBaseInfoByIds: distributorId_timestamp_productIds_privateKey
-        // queryProductDetailInfo: distributorId_timestamp_productId_privateKey
-        // queryProductPriceStock: distributorId_timestamp_productId_privateKey
+        // 合并所有参数（除了sign本身）
+        $allParams = array_merge([
+            'distributorId' => $this->distributorId,
+            'timestamp' => $timestamp,
+        ], $params);
 
-        $signString = $this->distributorId . '_' . $timestamp;
+        // 按字典顺序升序排列
+        ksort($allParams);
 
-        // 根据不同的方法添加额外的签名参数
-        switch ($method) {
-            case 'queryProductBaseInfoByIds':
-                if (isset($params['productIds']) && is_array($params['productIds'])) {
-                    $signString .= '_' . implode(',', $params['productIds']);
-                }
-                break;
-            case 'queryProductDetailInfo':
-            case 'queryProductPriceStock':
-                if (isset($params['productId'])) {
-                    $signString .= '_' . $params['productId'];
-                }
-                break;
-            // queryProductBaseInfoByPage 不需要额外参数
+        // 处理参数值并拼接
+        $paramStrings = [];
+        foreach ($allParams as $key => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+            
+            // 如果是数组，按照英文逗号分割
+            if (is_array($value)) {
+                $value = implode(',', $value);
+            }
+            
+            // 拼接格式：key=value
+            $paramStrings[] = $key . '=' . $value;
         }
 
-        // 最后添加私钥
-        $signString .= '_' . $this->appSecret;
+        // 按英文逗号分割，无空格
+        $signString = implode(',', $paramStrings);
 
-        Log::debug("Built sign string for Custom API", [
+        Log::debug("Built sign params for Custom API", [
             'method' => $method,
-            'sign_string_snippet' => substr($signString, 0, 100) . '...'
+            'param_count' => count($allParams),
+            'sign_string' => $signString
         ]);
 
         return $signString;
